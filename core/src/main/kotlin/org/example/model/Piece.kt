@@ -23,6 +23,8 @@ data class Piece(
     // TODO check that pieces alternate
     var stackedPieces: MutableList<Piece> = mutableListOf(),
 ) {
+  val drawableKey = "${colorName.colorName}_${type.name}"
+
   fun deepCopy(): Piece {
     //		val string = Json.encodeToString(serializer(), this)
     //		return Json.decodeFromString(serializer(), string)

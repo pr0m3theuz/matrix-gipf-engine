@@ -44,3 +44,10 @@ tasks {
 		dependsOn(fatJar) // Trigger fat jar creation during build
 	}
 }
+
+compose.resources {
+	customDirectory(
+		sourceSetName = "jvmMain",
+		directoryProvider = provider { layout.projectDirectory.dir("composeResources") }
+	)
+}

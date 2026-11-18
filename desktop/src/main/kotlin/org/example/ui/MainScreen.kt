@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.capitalize
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -36,6 +37,9 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import code.desktop.generated.resources.Res
+import code.desktop.generated.resources.allDrawableResources
+import kotlinx.coroutines.coroutineScope
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -46,7 +50,11 @@ import org.hexworks.mixite.core.api.HexagonOrientation
 import org.hexworks.mixite.core.api.HexagonalGridBuilder
 import org.hexworks.mixite.core.api.HexagonalGridLayout
 import org.hexworks.mixite.core.api.contract.SatelliteData
+import org.jetbrains.compose.resources.imageResource
+import org.jetbrains.compose.resources.painterResource
 import org.jetbrains.skia.Image
+import java.util.Locale
+import java.util.Locale.getDefault
 
 @Composable
 fun MainScreen(
@@ -1131,6 +1139,13 @@ fun DrawBoard(uiState: MainUiState, selectedMoveCoordinates: List<Coordinate>) {
     spots?.first { it.bitmask == bitmask }
   }
 
+  fun getPieceImage(piece: Piece): ImageBitmap {
+    val res = Res.getUri("drawable/${piece.drawableKey}.png")
+
+    return Image.makeFromEncoded(File(res).readBytes()).toComposeImageBitmap()
+  }
+
+
   Row {
     /*    Card(
         modifier = Modifier.padding(16.dp).fillMaxWidth(0.25f),
@@ -1388,7 +1403,7 @@ fun Pieces(pieces: List<Piece>, title: String) {
                     ) {
                       Image(
                           modifier = Modifier.size(64.dp),
-                          bitmap = getPieceImage(piece),
+                          bitmap = imageResource(Res.allDrawableResources.getValue(piece.drawableKey)),
                           contentDescription = null,
                       )
                     }
@@ -1401,14 +1416,3 @@ fun Pieces(pieces: List<Piece>, title: String) {
   }
 }
 
-private fun getPieceImage(piece: Piece): ImageBitmap {
-
-  val dir =
-      "/Users/darronporter/Downloads/Dissertation/code-cli-desktop/core/src/main/resources/images"
-
-  return Image.makeFromEncoded(
-          File("$dir/${piece.colorName.name.lowercase()}_${piece.type.name.lowercase()}.png")
-              .readBytes()
-      )
-      .toComposeImageBitmap()
-}

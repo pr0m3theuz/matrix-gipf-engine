@@ -24,9 +24,9 @@ import org.example.engine.TranspositionTable
 
 private val logger = io.github.oshai.kotlinlogging.KotlinLogging.logger {}
 
-enum class PlayerName {
-  WHITE,
-  BLACK,
+enum class PlayerName(val colorName: String) {
+  WHITE("White"),
+  BLACK("Black"),
 }
 
 enum class Model {
