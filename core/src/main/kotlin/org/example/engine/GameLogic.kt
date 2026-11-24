@@ -8,6 +8,7 @@ import kotlin.time.measureTimedValue
 import kotlinx.serialization.json.Json
 import org.example.ai.mcts.PackedMove
 import org.example.ai.mcts.encode
+import org.example.ai.mcts.encodeCNN
 import org.example.ai.minimax.SearchInfo
 import org.example.model.*
 
@@ -175,10 +176,22 @@ suspend fun playerMove(state: State, turnPhase: TurnPhase, turn: Int, rng: Rando
         globalState = state.encodeGlobalState(turnPhase = turnPhase),
     )
 
+    state.currentPlayer.collectorCNN?.recordDecision(
+      state = state.encodeStateCNN(),
+      action = packedMove.encodeCNN(),
+      globalState = state.encodeGlobalState(turnPhase = turnPhase),
+    )
+
     state.collector?.recordDecision(
         state = state.encodeState(),
         action = packedMove.encode(),
         globalState = state.encodeGlobalState(turnPhase = turnPhase),
+    )
+
+    state.collectorCNN?.recordDecision(
+      state = state.encodeStateCNN(),
+      action = packedMove.encodeCNN(),
+      globalState = state.encodeGlobalState(turnPhase = turnPhase),
     )
 
     state.turnMoves.getOrDefault(turn, mutableListOf()).add(packedMove)

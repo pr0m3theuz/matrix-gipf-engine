@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalUnsignedTypes::class)
+
 package org.example
 
 import kotlinx.coroutines.Deferred
@@ -7,6 +9,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import org.example.engine.ExperienceCollector
+import org.example.engine.ExperienceCollectorCNN
 import org.example.engine.determineWinner
 import org.example.engine.evaluateCapturedPieces
 import org.example.engine.playerTurn
@@ -29,11 +32,14 @@ suspend fun main() = coroutineScope {
     val failed = AtomicInteger(0)
     val startTime = System.currentTimeMillis()
 
+  val baseSeed = System.currentTimeMillis()
+
   val (jobs: List<Deferred<Any?>>, elapsedMs: Duration) = measureTimedValue {
-      (1..totalGames).map { gameId ->
-        async(dispatcher) {
-          try {
-            val collectors = playOneGame(gameId)
+    (1..totalGames).map { gameId ->
+      async(dispatcher) {
+        val gameSeed = deriveSeed(baseSeed, gameId)
+        try {
+            val collectors = playOneGame(gameId, gameSeed)
             val n = completed.incrementAndGet()
             if (n % 100 == 0) {
                 val secs = (System.currentTimeMillis() - startTime) / 1000.0
@@ -67,7 +73,7 @@ suspend fun main() = coroutineScope {
   //
     stateBuffer.serialize(
           Path(
-            "state_experience_mcts_${totalGames}_games_${
+            "state_experience_gnn_mcts_${totalGames}_games_${
               now().toString().replace(
                 ":",
                 "-"
@@ -81,13 +87,28 @@ suspend fun main() = coroutineScope {
     }
 }
 
-fun playOneGame(gameId: Int): ExperienceCollector? {
-  val rng = Random(1)
+fun playOneGame(gameId: Int, seed: Long): ExperienceCollector? {
+  val rng = Random(seed)
   var gameState: State =
-      initializeState(
-          playerOneModel = Model.MCTS,
-          playerTwoModel = Model.MCTS,
-      )
+    initializeState(
+      whitePlayer =
+        Player(
+          name = PlayerName.WHITE,
+          model = Model.MCTS,
+          enableFPU = true,
+          enablePW = true,
+          iterations = 10000,
+        ),
+      blackPlayer =
+        Player(
+          name = PlayerName.BLACK,
+          model = Model.MCTS,
+          enableFPU = true,
+          enablePW = true,
+          iterations = 10000,
+        ),
+    )
+
   var turn = 0
   var playerWhoMadeTheLastMove: Player? = null
 
@@ -149,5 +170,77 @@ fun playOneGame(gameId: Int): ExperienceCollector? {
 //      gameState.collector,
 //      gameState.currentPlayer.collector,
 //      gameState.nextPlayer.collector,
+//  )
+}
+
+
+fun playOneGameCNN(gameId: Int): ExperienceCollectorCNN? {
+  val rng = Random(1)
+  var gameState: State =
+    initializeState(
+      playerOneModel = Model.MCTS,
+      playerTwoModel = Model.MCTS,
+    )
+  var turn = 0
+  var playerWhoMadeTheLastMove: Player? = null
+
+  while (!evaluateCapturedPieces(gameState)) {
+    turn++
+    gameState.turnMoves[turn] = mutableListOf()
+
+    if (evaluateCapturedPieces(gameState)) break
+
+    gameState = runBlocking {
+      playerTurn(gameState, turn, rng)
+    }
+
+
+    gameState.assertPieceCount(EXPECTED_TOTAL, MAXIMUM_PIECES)
+    if (gameState.turnMoves.size > 2) {
+      val stalled =
+        gameState.turnMoves.keys.toList().takeLast(1).all {
+          gameState.turnMoves[it].isNullOrEmpty()
+        }
+      if (stalled) break
+    }
+
+    playerWhoMadeTheLastMove = gameState.currentPlayer
+    gameState = gameState.rotatePlayers()
+
+    check(gameState.currentPlayer.name != gameState.nextPlayer.name) {
+      "Turn rotation failure in game $gameId"
+    }
+  }
+
+  val winner =
+    determineWinner(
+      gameState.currentPlayer,
+      gameState.nextPlayer,
+      playerWhoMadeTheLastMove,
+      state = gameState,
+      printStatement = false, // turn this off in batch runs
+    )?.winner
+
+  when (winner?.name) {
+    gameState.currentPlayer.name -> {
+      gameState.currentPlayer.collectorCNN?.endEpisode(1)
+      gameState.nextPlayer.collectorCNN?.endEpisode(-1)
+    }
+    gameState.nextPlayer.name -> {
+      gameState.nextPlayer.collectorCNN?.endEpisode(1)
+      gameState.currentPlayer.collectorCNN?.endEpisode(-1)
+    }
+    else -> {}
+  }
+
+  // IMPORTANT: unique identifier per game so parallel saves don't clobber each other
+//  gameState.collectorCNN?.saveCurrentEpisodes(agent = "mcts", games = gameId.toString())
+  gameState.collectorCNN?.endEpisode(0)
+  return gameState.collectorCNN
+
+//  return listOf<ExperienceCollector?>(
+//      gameState.collectorCNN,
+//      gameState.currentPlayer.collectorCNN,
+//      gameState.nextPlayer.collectorCNN,
 //  )
 }

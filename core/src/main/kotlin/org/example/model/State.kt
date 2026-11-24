@@ -8,21 +8,23 @@ import kotlinx.serialization.json.Json
 import org.example.ai.mcts.PackedMove
 import org.example.ai.minimax.SearchInfo
 import org.example.engine.ExperienceCollector
-import kotlin.time.Duration
+import org.example.engine.ExperienceCollectorCNN
 
 private val logger = io.github.oshai.kotlinlogging.KotlinLogging.logger {}
 
 @Serializable
 data class State(
-  val currentPlayer: Player,
-  val nextPlayer: Player,
-  @Transient val board: Board = Board(emptySet()),
-  val bitboard: Bitboard,
-  @Transient val lines: Lines? = null,
-  val turnMoves: MutableMap<Int, MutableList<PackedMove>> = mutableMapOf(), // moves per turn
-  val turnDuration: MutableMap<Int, MutableList<Long>> = mutableMapOf(), // moves per turn
-  @Transient val turnSearchInfo: MutableMap<Int, MutableList<MutableList<SearchInfo>>> = mutableMapOf(),
-  @Transient val collector: ExperienceCollector? = ExperienceCollector(),
+    val currentPlayer: Player,
+    val nextPlayer: Player,
+    @Transient val board: Board = Board(emptySet()),
+    val bitboard: Bitboard,
+    @Transient val lines: Lines? = null,
+    val turnMoves: MutableMap<Int, MutableList<PackedMove>> = mutableMapOf(), // moves per turn
+    val turnDuration: MutableMap<Int, MutableList<Long>> = mutableMapOf(), // moves per turn
+    @Transient
+    val turnSearchInfo: MutableMap<Int, MutableList<MutableList<SearchInfo>>> = mutableMapOf(),
+    @Transient val collector: ExperienceCollector? = ExperienceCollector(),
+    @Transient val collectorCNN: ExperienceCollectorCNN? = ExperienceCollectorCNN(),
 ) {
   fun deepCopy(copyCollector: Boolean = false): State {
     //    val string = Json.encodeToString(serializer(), this)
@@ -36,8 +38,9 @@ data class State(
         //	    lines = this.lines,
         turnMoves = this.turnMoves.toMutableMap(),
         turnDuration = this.turnDuration.toMutableMap(),
-      turnSearchInfo = this.turnSearchInfo.toMutableMap(),
+        turnSearchInfo = this.turnSearchInfo.toMutableMap(),
         collector = if (copyCollector) this.collector else null,
+        collectorCNN = if (copyCollector) this.collectorCNN else null,
     )
   }
 
@@ -49,8 +52,9 @@ data class State(
         bitboard = bitboard,
         turnMoves = this.turnMoves,
         turnDuration = this.turnDuration,
-      turnSearchInfo = this.turnSearchInfo,
+        turnSearchInfo = this.turnSearchInfo,
         collector = this.collector,
+        collectorCNN = this.collectorCNN,
     )
   }
 }
@@ -64,13 +68,13 @@ fun State.printStateSummary() {
   sb.appendLine("Active Players:")
   sb.appendLine("  • CURRENT: ${currentPlayer.name}")
   sb.appendLine(
-      "    - Reserve:  ${currentPlayer.piecesInReserve.count {it.extractPotential() || it.extractPieceType() == PieceType.GIPF}} pieces"
+      "    - Reserve:  ${currentPlayer.piecesInReserve.count {it.extractPotential() || it.extractPieceType() == PieceType.GIPF}} pieces",
   )
   sb.appendLine("    - Captured: ${currentPlayer.capturedPieces.size} pieces")
 
   sb.appendLine("  • NEXT:    ${nextPlayer.name}")
   sb.appendLine(
-      "    - Reserve:  ${nextPlayer.piecesInReserve.count {it.extractPotential() || it.extractPieceType() == PieceType.GIPF}} pieces"
+      "    - Reserve:  ${nextPlayer.piecesInReserve.count {it.extractPotential() || it.extractPieceType() == PieceType.GIPF}} pieces",
   )
   sb.appendLine("    - Captured: ${nextPlayer.capturedPieces.size} pieces")
 
@@ -94,7 +98,7 @@ fun State.printStateSummary() {
           }
 
       sb.appendLine(
-          "  • [${node.coordinate.column}${node.coordinate.row}] -> $pieceColor $pieceType$potentialStr"
+          "  • [${node.coordinate.column}${node.coordinate.row}] -> $pieceColor $pieceType$potentialStr",
       )
     }
   }
@@ -162,212 +166,220 @@ fun State.assertPieceCount(
         it.piece?.stackedPieces?.count { p -> p.colorName == PlayerName.BLACK } ?: 0
       }
 
-//  var gipfPieces =
-//      nextPlayer.piecesInReserve.count {
-//        it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() == PieceType.GIPF
-//      } +
-//          nextPlayer.capturedPieces.count {
-//            it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() == PieceType.GIPF
-//          } +
-//          currentPlayer.piecesInReserve.count {
-//            it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() == PieceType.GIPF
-//          } +
-//          currentPlayer.capturedPieces.count {
-//            it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() == PieceType.GIPF
-//          } +
-//          board.nodes.count {
-//            it.piece?.colorName == PlayerName.BLACK && it.piece?.type == PieceType.GIPF
-//          }
-//
-//  var zertzPieces =
-//      nextPlayer.piecesInReserve.sumOf {
-//        if (
-//            it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() == PieceType.ZERTZ
-//        ) {
-//          if (it.extractPotential() == true) 2 else 1
-//        } else 0
-//      } +
-//          nextPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.BLACK &&
-//                    it.extractPieceType() == PieceType.ZERTZ
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.piecesInReserve.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.BLACK &&
-//                    it.extractPieceType() == PieceType.ZERTZ
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.BLACK &&
-//                    it.extractPieceType() == PieceType.ZERTZ
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          board.nodes.sumOf {
-//            if (it.piece?.colorName == PlayerName.BLACK && it.piece?.type == PieceType.ZERTZ) {
-//              if (it.piece?.potential == true) 2 else 1
-//            } else 0
-//          }
-//
-//  var tamskPieces =
-//      nextPlayer.piecesInReserve.sumOf {
-//        if (
-//            it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() == PieceType.TAMSK
-//        ) {
-//          if (it.extractPotential() == true) 2 else 1
-//        } else 0
-//      } +
-//          nextPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.BLACK &&
-//                    it.extractPieceType() == PieceType.TAMSK
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.piecesInReserve.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.BLACK &&
-//                    it.extractPieceType() == PieceType.TAMSK
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.BLACK &&
-//                    it.extractPieceType() == PieceType.TAMSK
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          board.nodes.sumOf {
-//            if (it.piece?.colorName == PlayerName.BLACK && it.piece?.type == PieceType.TAMSK) {
-//              if (it.piece?.potential == true) 2 else 1
-//            } else 0
-//          }
-//
-//  var yinshPieces =
-//      nextPlayer.piecesInReserve.sumOf {
-//        if (
-//            it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() == PieceType.YINSH
-//        ) {
-//          if (it.extractPotential() == true) 2 else 1
-//        } else 0
-//      } +
-//          nextPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.BLACK &&
-//                    it.extractPieceType() == PieceType.YINSH
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.piecesInReserve.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.BLACK &&
-//                    it.extractPieceType() == PieceType.YINSH
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.BLACK &&
-//                    it.extractPieceType() == PieceType.YINSH
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          board.nodes.sumOf {
-//            if (it.piece?.colorName == PlayerName.BLACK && it.piece?.type == PieceType.YINSH) {
-//              if (it.piece?.potential == true) 2 else 1
-//            } else 0
-//          }
-//
-//  var dvonnPieces =
-//      nextPlayer.piecesInReserve.sumOf {
-//        if (
-//            it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() == PieceType.DVONN
-//        ) {
-//          if (it.extractPotential() == true) 2 else 1
-//        } else 0
-//      } +
-//          nextPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.BLACK &&
-//                    it.extractPieceType() == PieceType.DVONN
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.piecesInReserve.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.BLACK &&
-//                    it.extractPieceType() == PieceType.DVONN
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.BLACK &&
-//                    it.extractPieceType() == PieceType.DVONN
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          board.nodes.sumOf {
-//            if (it.piece?.colorName == PlayerName.BLACK && it.piece?.type == PieceType.DVONN) {
-//              if (it.piece?.potential == true) 2 else 1
-//            } else 0
-//          }
-//
-//  var punctPieces =
-//      nextPlayer.piecesInReserve.sumOf {
-//        if (
-//            it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() == PieceType.PUNCT
-//        ) {
-//          if (it.extractPotential() == true) 2 else 1
-//        } else 0
-//      } +
-//          nextPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.BLACK &&
-//                    it.extractPieceType() == PieceType.PUNCT
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.piecesInReserve.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.BLACK &&
-//                    it.extractPieceType() == PieceType.PUNCT
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.BLACK &&
-//                    it.extractPieceType() == PieceType.PUNCT
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          board.nodes.sumOf {
-//            if (it.piece?.colorName == PlayerName.BLACK && it.piece?.type == PieceType.PUNCT) {
-//              if (it.piece?.potential == true) 2 else 1
-//            } else 0
-//          }
+  //  var gipfPieces =
+  //      nextPlayer.piecesInReserve.count {
+  //        it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() == PieceType.GIPF
+  //      } +
+  //          nextPlayer.capturedPieces.count {
+  //            it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() ==
+  // PieceType.GIPF
+  //          } +
+  //          currentPlayer.piecesInReserve.count {
+  //            it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() ==
+  // PieceType.GIPF
+  //          } +
+  //          currentPlayer.capturedPieces.count {
+  //            it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() ==
+  // PieceType.GIPF
+  //          } +
+  //          board.nodes.count {
+  //            it.piece?.colorName == PlayerName.BLACK && it.piece?.type == PieceType.GIPF
+  //          }
+  //
+  //  var zertzPieces =
+  //      nextPlayer.piecesInReserve.sumOf {
+  //        if (
+  //            it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() ==
+  // PieceType.ZERTZ
+  //        ) {
+  //          if (it.extractPotential() == true) 2 else 1
+  //        } else 0
+  //      } +
+  //          nextPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.BLACK &&
+  //                    it.extractPieceType() == PieceType.ZERTZ
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.piecesInReserve.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.BLACK &&
+  //                    it.extractPieceType() == PieceType.ZERTZ
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.BLACK &&
+  //                    it.extractPieceType() == PieceType.ZERTZ
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          board.nodes.sumOf {
+  //            if (it.piece?.colorName == PlayerName.BLACK && it.piece?.type == PieceType.ZERTZ) {
+  //              if (it.piece?.potential == true) 2 else 1
+  //            } else 0
+  //          }
+  //
+  //  var tamskPieces =
+  //      nextPlayer.piecesInReserve.sumOf {
+  //        if (
+  //            it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() ==
+  // PieceType.TAMSK
+  //        ) {
+  //          if (it.extractPotential() == true) 2 else 1
+  //        } else 0
+  //      } +
+  //          nextPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.BLACK &&
+  //                    it.extractPieceType() == PieceType.TAMSK
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.piecesInReserve.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.BLACK &&
+  //                    it.extractPieceType() == PieceType.TAMSK
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.BLACK &&
+  //                    it.extractPieceType() == PieceType.TAMSK
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          board.nodes.sumOf {
+  //            if (it.piece?.colorName == PlayerName.BLACK && it.piece?.type == PieceType.TAMSK) {
+  //              if (it.piece?.potential == true) 2 else 1
+  //            } else 0
+  //          }
+  //
+  //  var yinshPieces =
+  //      nextPlayer.piecesInReserve.sumOf {
+  //        if (
+  //            it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() ==
+  // PieceType.YINSH
+  //        ) {
+  //          if (it.extractPotential() == true) 2 else 1
+  //        } else 0
+  //      } +
+  //          nextPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.BLACK &&
+  //                    it.extractPieceType() == PieceType.YINSH
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.piecesInReserve.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.BLACK &&
+  //                    it.extractPieceType() == PieceType.YINSH
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.BLACK &&
+  //                    it.extractPieceType() == PieceType.YINSH
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          board.nodes.sumOf {
+  //            if (it.piece?.colorName == PlayerName.BLACK && it.piece?.type == PieceType.YINSH) {
+  //              if (it.piece?.potential == true) 2 else 1
+  //            } else 0
+  //          }
+  //
+  //  var dvonnPieces =
+  //      nextPlayer.piecesInReserve.sumOf {
+  //        if (
+  //            it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() ==
+  // PieceType.DVONN
+  //        ) {
+  //          if (it.extractPotential() == true) 2 else 1
+  //        } else 0
+  //      } +
+  //          nextPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.BLACK &&
+  //                    it.extractPieceType() == PieceType.DVONN
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.piecesInReserve.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.BLACK &&
+  //                    it.extractPieceType() == PieceType.DVONN
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.BLACK &&
+  //                    it.extractPieceType() == PieceType.DVONN
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          board.nodes.sumOf {
+  //            if (it.piece?.colorName == PlayerName.BLACK && it.piece?.type == PieceType.DVONN) {
+  //              if (it.piece?.potential == true) 2 else 1
+  //            } else 0
+  //          }
+  //
+  //  var punctPieces =
+  //      nextPlayer.piecesInReserve.sumOf {
+  //        if (
+  //            it.extractPieceColor() == PlayerName.BLACK && it.extractPieceType() ==
+  // PieceType.PUNCT
+  //        ) {
+  //          if (it.extractPotential() == true) 2 else 1
+  //        } else 0
+  //      } +
+  //          nextPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.BLACK &&
+  //                    it.extractPieceType() == PieceType.PUNCT
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.piecesInReserve.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.BLACK &&
+  //                    it.extractPieceType() == PieceType.PUNCT
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.BLACK &&
+  //                    it.extractPieceType() == PieceType.PUNCT
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          board.nodes.sumOf {
+  //            if (it.piece?.colorName == PlayerName.BLACK && it.piece?.type == PieceType.PUNCT) {
+  //              if (it.piece?.potential == true) 2 else 1
+  //            } else 0
+  //          }
 
   val totalBlackPieces =
       nextReservePotentials +
@@ -490,212 +502,220 @@ fun State.assertPieceCount(
         it.piece?.stackedPieces?.count { p -> p.colorName == PlayerName.WHITE } ?: 0
       }
 
-//  gipfPieces =
-//      nextPlayer.piecesInReserve.count {
-//        it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() == PieceType.GIPF
-//      } +
-//          nextPlayer.capturedPieces.count {
-//            it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() == PieceType.GIPF
-//          } +
-//          currentPlayer.piecesInReserve.count {
-//            it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() == PieceType.GIPF
-//          } +
-//          currentPlayer.capturedPieces.count {
-//            it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() == PieceType.GIPF
-//          } +
-//          board.nodes.count {
-//            it.piece?.colorName == PlayerName.WHITE && it.piece?.type == PieceType.GIPF
-//          }
-//
-//  zertzPieces =
-//      nextPlayer.piecesInReserve.sumOf {
-//        if (
-//            it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() == PieceType.ZERTZ
-//        ) {
-//          if (it.extractPotential() == true) 2 else 1
-//        } else 0
-//      } +
-//          nextPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.WHITE &&
-//                    it.extractPieceType() == PieceType.ZERTZ
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.piecesInReserve.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.WHITE &&
-//                    it.extractPieceType() == PieceType.ZERTZ
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.WHITE &&
-//                    it.extractPieceType() == PieceType.ZERTZ
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          board.nodes.sumOf {
-//            if (it.piece?.colorName == PlayerName.WHITE && it.piece?.type == PieceType.ZERTZ) {
-//              if (it.piece?.potential == true) 2 else 1
-//            } else 0
-//          }
-//
-//  tamskPieces =
-//      nextPlayer.piecesInReserve.sumOf {
-//        if (
-//            it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() == PieceType.TAMSK
-//        ) {
-//          if (it.extractPotential() == true) 2 else 1
-//        } else 0
-//      } +
-//          nextPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.WHITE &&
-//                    it.extractPieceType() == PieceType.TAMSK
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.piecesInReserve.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.WHITE &&
-//                    it.extractPieceType() == PieceType.TAMSK
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.WHITE &&
-//                    it.extractPieceType() == PieceType.TAMSK
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          board.nodes.sumOf {
-//            if (it.piece?.colorName == PlayerName.WHITE && it.piece?.type == PieceType.TAMSK) {
-//              if (it.piece?.potential == true) 2 else 1
-//            } else 0
-//          }
-//
-//  yinshPieces =
-//      nextPlayer.piecesInReserve.sumOf {
-//        if (
-//            it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() == PieceType.YINSH
-//        ) {
-//          if (it.extractPotential() == true) 2 else 1
-//        } else 0
-//      } +
-//          nextPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.WHITE &&
-//                    it.extractPieceType() == PieceType.YINSH
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.piecesInReserve.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.WHITE &&
-//                    it.extractPieceType() == PieceType.YINSH
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.WHITE &&
-//                    it.extractPieceType() == PieceType.YINSH
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          board.nodes.sumOf {
-//            if (it.piece?.colorName == PlayerName.WHITE && it.piece?.type == PieceType.YINSH) {
-//              if (it.piece?.potential == true) 2 else 1
-//            } else 0
-//          }
-//
-//  dvonnPieces =
-//      nextPlayer.piecesInReserve.sumOf {
-//        if (
-//            it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() == PieceType.DVONN
-//        ) {
-//          if (it.extractPotential() == true) 2 else 1
-//        } else 0
-//      } +
-//          nextPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.WHITE &&
-//                    it.extractPieceType() == PieceType.DVONN
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.piecesInReserve.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.WHITE &&
-//                    it.extractPieceType() == PieceType.DVONN
-//            ) {
-//              if (it.extractPotential()) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.WHITE &&
-//                    it.extractPieceType() == PieceType.DVONN
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          board.nodes.sumOf {
-//            if (it.piece?.colorName == PlayerName.WHITE && it.piece?.type == PieceType.DVONN) {
-//              if (it.piece?.potential == true) 2 else 1
-//            } else 0
-//          }
-//
-//  punctPieces =
-//      nextPlayer.piecesInReserve.sumOf {
-//        if (
-//            it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() == PieceType.PUNCT
-//        ) {
-//          if (it.extractPotential()) 2 else 1
-//        } else 0
-//      } +
-//          nextPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.WHITE &&
-//                    it.extractPieceType() == PieceType.PUNCT
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.piecesInReserve.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.WHITE &&
-//                    it.extractPieceType() == PieceType.PUNCT
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          currentPlayer.capturedPieces.sumOf {
-//            if (
-//                it.extractPieceColor() == PlayerName.WHITE &&
-//                    it.extractPieceType() == PieceType.PUNCT
-//            ) {
-//              if (it.extractPotential() == true) 2 else 1
-//            } else 0
-//          } +
-//          board.nodes.sumOf {
-//            if (it.piece?.colorName == PlayerName.WHITE && it.piece?.type == PieceType.PUNCT) {
-//              if (it.piece?.potential == true) 2 else 1
-//            } else 0
-//          }
+  //  gipfPieces =
+  //      nextPlayer.piecesInReserve.count {
+  //        it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() == PieceType.GIPF
+  //      } +
+  //          nextPlayer.capturedPieces.count {
+  //            it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() ==
+  // PieceType.GIPF
+  //          } +
+  //          currentPlayer.piecesInReserve.count {
+  //            it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() ==
+  // PieceType.GIPF
+  //          } +
+  //          currentPlayer.capturedPieces.count {
+  //            it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() ==
+  // PieceType.GIPF
+  //          } +
+  //          board.nodes.count {
+  //            it.piece?.colorName == PlayerName.WHITE && it.piece?.type == PieceType.GIPF
+  //          }
+  //
+  //  zertzPieces =
+  //      nextPlayer.piecesInReserve.sumOf {
+  //        if (
+  //            it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() ==
+  // PieceType.ZERTZ
+  //        ) {
+  //          if (it.extractPotential() == true) 2 else 1
+  //        } else 0
+  //      } +
+  //          nextPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.WHITE &&
+  //                    it.extractPieceType() == PieceType.ZERTZ
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.piecesInReserve.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.WHITE &&
+  //                    it.extractPieceType() == PieceType.ZERTZ
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.WHITE &&
+  //                    it.extractPieceType() == PieceType.ZERTZ
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          board.nodes.sumOf {
+  //            if (it.piece?.colorName == PlayerName.WHITE && it.piece?.type == PieceType.ZERTZ) {
+  //              if (it.piece?.potential == true) 2 else 1
+  //            } else 0
+  //          }
+  //
+  //  tamskPieces =
+  //      nextPlayer.piecesInReserve.sumOf {
+  //        if (
+  //            it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() ==
+  // PieceType.TAMSK
+  //        ) {
+  //          if (it.extractPotential() == true) 2 else 1
+  //        } else 0
+  //      } +
+  //          nextPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.WHITE &&
+  //                    it.extractPieceType() == PieceType.TAMSK
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.piecesInReserve.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.WHITE &&
+  //                    it.extractPieceType() == PieceType.TAMSK
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.WHITE &&
+  //                    it.extractPieceType() == PieceType.TAMSK
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          board.nodes.sumOf {
+  //            if (it.piece?.colorName == PlayerName.WHITE && it.piece?.type == PieceType.TAMSK) {
+  //              if (it.piece?.potential == true) 2 else 1
+  //            } else 0
+  //          }
+  //
+  //  yinshPieces =
+  //      nextPlayer.piecesInReserve.sumOf {
+  //        if (
+  //            it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() ==
+  // PieceType.YINSH
+  //        ) {
+  //          if (it.extractPotential() == true) 2 else 1
+  //        } else 0
+  //      } +
+  //          nextPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.WHITE &&
+  //                    it.extractPieceType() == PieceType.YINSH
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.piecesInReserve.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.WHITE &&
+  //                    it.extractPieceType() == PieceType.YINSH
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.WHITE &&
+  //                    it.extractPieceType() == PieceType.YINSH
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          board.nodes.sumOf {
+  //            if (it.piece?.colorName == PlayerName.WHITE && it.piece?.type == PieceType.YINSH) {
+  //              if (it.piece?.potential == true) 2 else 1
+  //            } else 0
+  //          }
+  //
+  //  dvonnPieces =
+  //      nextPlayer.piecesInReserve.sumOf {
+  //        if (
+  //            it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() ==
+  // PieceType.DVONN
+  //        ) {
+  //          if (it.extractPotential() == true) 2 else 1
+  //        } else 0
+  //      } +
+  //          nextPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.WHITE &&
+  //                    it.extractPieceType() == PieceType.DVONN
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.piecesInReserve.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.WHITE &&
+  //                    it.extractPieceType() == PieceType.DVONN
+  //            ) {
+  //              if (it.extractPotential()) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.WHITE &&
+  //                    it.extractPieceType() == PieceType.DVONN
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          board.nodes.sumOf {
+  //            if (it.piece?.colorName == PlayerName.WHITE && it.piece?.type == PieceType.DVONN) {
+  //              if (it.piece?.potential == true) 2 else 1
+  //            } else 0
+  //          }
+  //
+  //  punctPieces =
+  //      nextPlayer.piecesInReserve.sumOf {
+  //        if (
+  //            it.extractPieceColor() == PlayerName.WHITE && it.extractPieceType() ==
+  // PieceType.PUNCT
+  //        ) {
+  //          if (it.extractPotential()) 2 else 1
+  //        } else 0
+  //      } +
+  //          nextPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.WHITE &&
+  //                    it.extractPieceType() == PieceType.PUNCT
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.piecesInReserve.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.WHITE &&
+  //                    it.extractPieceType() == PieceType.PUNCT
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          currentPlayer.capturedPieces.sumOf {
+  //            if (
+  //                it.extractPieceColor() == PlayerName.WHITE &&
+  //                    it.extractPieceType() == PieceType.PUNCT
+  //            ) {
+  //              if (it.extractPotential() == true) 2 else 1
+  //            } else 0
+  //          } +
+  //          board.nodes.sumOf {
+  //            if (it.piece?.colorName == PlayerName.WHITE && it.piece?.type == PieceType.PUNCT) {
+  //              if (it.piece?.potential == true) 2 else 1
+  //            } else 0
+  //          }
 
   val totalWhitePieces =
       nextReservePotentials +
@@ -775,4 +795,3 @@ fun State.assertPieceCount(
         "\nGame State: \n${Json.encodeToString(this)}"
   }
 }
-

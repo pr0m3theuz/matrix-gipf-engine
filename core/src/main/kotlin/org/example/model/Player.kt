@@ -20,6 +20,7 @@ import org.example.ai.minimax.SearchInfo
 import org.example.ai.minimax.alphaBetaNgMxSearch
 import org.example.ai.minimax.resolveBoardRemovals
 import org.example.engine.ExperienceCollector
+import org.example.engine.ExperienceCollectorCNN
 import org.example.engine.TranspositionTable
 
 private val logger = io.github.oshai.kotlinlogging.KotlinLogging.logger {}
@@ -126,6 +127,7 @@ data class Player(
     @EncodeDefault val iterations: Int = 0,
     @EncodeDefault val depth: Int = 0,
     @Transient val collector: ExperienceCollector? = ExperienceCollector(),
+    @Transient val collectorCNN: ExperienceCollectorCNN? = ExperienceCollectorCNN(),
     @Transient val transpositionTable: TranspositionTable = TranspositionTable(),
     @Transient val killerMoves: List<UIntArray> = List(2) { UIntArray(64) },
     @Transient val captureMoves: List<UIntArray> = List(2) { UIntArray(64) },
@@ -149,6 +151,7 @@ data class Player(
         iterations = this.iterations,
         depth = this.depth,
         collector = if (copyCollector) this.collector else null,
+        collectorCNN = if (copyCollector) this.collectorCNN else null,
         transpositionTable = this.transpositionTable,
         killerMoves = this.killerMoves,
         captureMoves = this.captureMoves,
@@ -171,6 +174,7 @@ data class Player(
         iterations = this.iterations,
         depth = this.depth,
         collector = if (copyCollector) this.collector else null,
+        collectorCNN = if (copyCollector) this.collectorCNN else null,
         transpositionTable = this.transpositionTable,
         killerMoves = emptyList(),
         captureMoves = emptyList(),

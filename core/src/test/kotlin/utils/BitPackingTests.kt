@@ -310,4 +310,12 @@ class BitPackingTests {
 
     assertEquals(expectedvalue, reconstructedValue)
   }
+
+  @Test
+  fun `encode ULong to D2Array`() {
+    println(0b1001000100001000001000000000000000000000
+      .toULong()
+      .encodeToNestedArray()
+    )
+  }
 }

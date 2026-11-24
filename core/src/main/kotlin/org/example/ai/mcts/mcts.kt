@@ -16,6 +16,7 @@ import org.example.engine.determineWinner
 import org.example.model.*
 import org.example.toBitList
 import org.jetbrains.kotlinx.multik.ndarray.data.D1
+import org.jetbrains.kotlinx.multik.ndarray.data.D2
 import org.jetbrains.kotlinx.multik.ndarray.data.NDArray
 
 private val logger = io.github.oshai.kotlinlogging.KotlinLogging.logger {}
@@ -50,6 +51,24 @@ fun PackedMove.encode(): NDArray<Int, D1> {
     }
   }
 }
+
+fun PackedMove.encodeCNN(): NDArray<Int, D2> {
+  return when (this) {
+    is PackedMove.Multiple -> {
+      values
+        .fold(0UL) { acc, bit ->
+          acc or bit.extractTargetBit()
+        }
+        .encodeToNestedArray()
+    }
+    is PackedMove.Single -> {
+      val targetBit = value.extractTargetBit()
+      requireNotNull(targetBit) { "Target bit must not be null" }
+      targetBit.encodeToNestedArray()
+    }
+  }
+}
+
 
 fun PackedMove.extractTargetBit(): ULong? {
   return when (this) {

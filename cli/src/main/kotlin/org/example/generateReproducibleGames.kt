@@ -329,7 +329,7 @@ private suspend fun runBatch(
 }
 
 /** Deterministic per-game seed. Same baseSeed + gameId always yields the same seed. */
-private fun deriveSeed(baseSeed: Long, gameId: Int): Long {
+fun deriveSeed(baseSeed: Long, gameId: Int): Long {
   return baseSeed xor (gameId.toLong() * -0x61c8864680b583ebL)
 }
 

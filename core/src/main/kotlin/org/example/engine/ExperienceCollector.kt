@@ -2,6 +2,7 @@ package org.example.engine
 
 import io.jhdf.HdfFile
 import io.jhdf.api.WritableGroup
+import java.io.File
 import java.nio.file.Path
 import kotlin.io.path.Path
 import kotlin.time.Clock.System.now
@@ -9,7 +10,6 @@ import org.jetbrains.kotlinx.multik.api.*
 import org.jetbrains.kotlinx.multik.api.io.writeNPZ
 import org.jetbrains.kotlinx.multik.ndarray.data.*
 import org.jetbrains.kotlinx.multik.ndarray.operations.plus
-import java.io.File
 
 data class ExperienceCollector(
     // list of episodes<game states per episode<features & nodes>>
@@ -295,29 +295,29 @@ fun padStates(
     "targetLength ($targetLength) must be >= states.size (${states.size})"
   }
 
-  val rows = states.first().shape[0]
-  val cols = states.first().shape[1]
-  val flat = IntArray(targetLength * rows * cols) { padValue }
+  val featureCount = states.first().shape[0] // number of features
+  val vectors = states.first().shape[1] // number of graph vectors
+  val flat = IntArray(targetLength * featureCount * vectors) { padValue }
 
   var idx = 0
   for (t in 0 until targetLength) {
     if (t < states.size) {
       val frame = states[t]
-      require(frame.shape[0] == rows && frame.shape[1] == cols) {
-        "All states must share the same shape; expected [$rows,$cols] but got " +
+      require(frame.shape[0] == featureCount && frame.shape[1] == vectors) {
+        "All states must share the same shape; expected [$featureCount,$vectors] but got " +
             "[${frame.shape[0]},${frame.shape[1]}] at index $t"
       }
-      for (r in 0 until rows) {
-        for (c in 0 until cols) {
+      for (r in 0 until featureCount) {
+        for (c in 0 until vectors) {
           flat[idx++] = frame[r, c]
         }
       }
     } else {
-      idx += rows * cols // already padValue, just advance
+      idx += featureCount * vectors // already padValue, just advance
     }
   }
 
-  return mk.ndarray(flat, targetLength, rows, cols)
+  return mk.ndarray(flat, targetLength, featureCount, vectors)
 }
 
 /**
@@ -386,4 +386,331 @@ fun padGlobalStates(
   }
 
   return mk.ndarray(flat, targetLength, actionDim)
+}
+
+data class ExperienceCollectorCNN(
+    // list of episodes<game states per episode<features & nodes>>
+    val states: MutableList<List<D3Array<Int>>> = mutableListOf(),
+    val actions: MutableList<List<D2Array<Int>>> = mutableListOf(),
+    val globalStates: MutableList<List<D1Array<Float>>> = mutableListOf(),
+    val rewards: MutableList<List<Int>> = mutableListOf(),
+    val currentEpisodeStates: MutableList<D3Array<Int>> = mutableListOf(),
+    val currentEpisodeActions: MutableList<D2Array<Int>> = mutableListOf(),
+    val currentEpisodeGlobalStates: MutableList<D1Array<Float>> = mutableListOf(),
+) {
+  fun beginEpisode() {}
+
+  operator fun plus(other: ExperienceCollectorCNN): ExperienceCollectorCNN {
+    return ExperienceCollectorCNN(
+        states = (this.states + other.states).toMutableList(),
+        actions = (this.actions + other.actions).toMutableList(),
+        globalStates = (this.globalStates + other.globalStates).toMutableList(),
+        rewards = (this.rewards + other.rewards).toMutableList(),
+    )
+  }
+
+  fun endEpisode(reward: Int) {
+    states.add(currentEpisodeStates.toList())
+    actions.add(currentEpisodeActions.toList())
+    globalStates.add(currentEpisodeGlobalStates.toList())
+    rewards.add(List<Int>(currentEpisodeStates.size) { reward })
+
+    currentEpisodeStates.clear()
+    currentEpisodeActions.clear()
+    currentEpisodeGlobalStates.clear()
+  }
+
+  // action is the possibleBitMove.targetBit.toBitList() or retrievedCapturedPiecesBit
+  // sum.toBitList()
+  fun recordDecision(state: D3Array<Int>, action: D2Array<Int>, globalState: D1Array<Float>) {
+    currentEpisodeStates.add(state)
+    currentEpisodeActions.add(action)
+    currentEpisodeGlobalStates.add(globalState)
+  }
+
+  fun save(agent: String, games: String) {
+    mk.writeNPZ(
+        Path("experience_${agent}_${games}_${now().toString().replace(":", "-")}.npz"),
+        states.toPaddedD5Array(),
+        actions.toPaddedD4Array(),
+        rewards.toPaddedD2Array(),
+    )
+  }
+
+  fun saveCurrentEpisodes(agent: String, games: String) {
+    mk.writeNPZ(
+        Path("experience_${agent}_${games}_${now().toString().replace(":", "-")}.npz"),
+        padStatesCNN(currentEpisodeStates, currentEpisodeStates.size),
+        padActionsCNN(currentEpisodeActions, currentEpisodeActions.size),
+        padGlobalStates(currentEpisodeGlobalStates, currentEpisodeGlobalStates.size),
+    )
+  }
+
+  fun toBuffer(): ExperienceBufferCNN {
+    return ExperienceBufferCNN(
+        states.toPaddedD5Array(),
+        actions.toPaddedD4Array(),
+        globalStates.toPaddedFloatD3Array(),
+        rewards.toPaddedD2Array(),
+    )
+  }
+}
+
+private fun List<List<NDArray<Int, D3>>>.toPaddedD5Array(): NDArray<Int, DN> {
+
+  val d1 = this.size // list size
+  val maxD2 = this.maxOf { it.size }
+  val d3 = this[0][0].shape[0]
+  val d4 = this[0][0].shape[1] // row
+  val d5 = this[0][0].shape[2] // column
+
+  val padded = mk.zeros<Int>(d1, maxD2, d3, d4, d5)
+
+  for (i in this.indices) {
+    for (j in this[i].indices) {
+      val matrix = this[i][j]
+      for (k in 0 until d3) {
+        for (l in 0 until d4) {
+          for (m in 0 until d5) {
+            padded[i, j, k, l, m] = matrix[k, l, m]
+          }
+        }
+      }
+    }
+  }
+  return padded
+}
+
+fun padStatesCNN(
+    states: List<D3Array<Int>>,
+    targetLength: Int,
+    padValue: Int = 0,
+): D4Array<Int> {
+  require(states.isNotEmpty()) { "states must not be empty to infer row/col dims" }
+  require(targetLength >= states.size) {
+    "targetLength ($targetLength) must be >= states.size (${states.size})"
+  }
+
+  val featureCount = states.first().shape[0] // number of features
+  val rows = states.first().shape[1] // number of rows on the board
+  val cols = states.first().shape[2] // number of columns on the board
+  val flat = IntArray(targetLength * featureCount * rows * cols) { padValue }
+
+  var idx = 0
+  for (t in 0 until targetLength) {
+    if (t < states.size) {
+      val frame = states[t]
+      require(frame.shape[0] == featureCount && frame.shape[1] == rows && frame.shape[2] == cols) {
+        "All states must share the same shape; expected [$featureCount, $rows, $cols] but got " +
+            "[${frame.shape[0]}, ${frame.shape[1]}, ${frame.shape[2]}] at index $t"
+      }
+      for (feature in 0 until featureCount) {
+        for (r in 0 until rows) {
+          for (c in 0 until cols) {
+            flat[idx++] = frame[feature, r, c]
+          }
+        }
+      }
+    } else {
+      idx += rows * cols // already padValue, just advance
+    }
+  }
+
+  return mk.ndarray(flat, targetLength, featureCount, rows, cols)
+}
+
+/**
+ * Pads a single episode's list of 1D actions into a fixed-length D2Array of shape
+ * [targetLength, actionDim]. Extra timesteps beyond the list's length are filled with padValue.
+ */
+fun padActionsCNN(
+    actions: List<D2Array<Int>>,
+    targetLength: Int,
+    padValue: Int = 0,
+): D3Array<Int> {
+  require(actions.isNotEmpty()) { "actions must not be empty to infer action dim" }
+  require(targetLength >= actions.size) {
+    "targetLength ($targetLength) must be >= actions.size (${actions.size})"
+  }
+
+  val rows = actions.first().shape[0]
+  val cols = actions.first().shape[1]
+
+  val flat = IntArray(targetLength * rows * cols) { padValue }
+
+  var idx = 0
+  for (t in 0 until targetLength) {
+    if (t < actions.size) {
+      val action = actions[t]
+      require(action.shape[0] == rows) {
+        "All actions must share the same dim; expected [$rows, $cols] but got " +
+            "[${action.shape[0]}, ${action.shape[1]}] at index $t"
+      }
+      for (r in 0 until rows) {
+        for (c in 0 until cols) {
+          flat[idx++] = action[r, c]
+        }
+      }
+    } else {
+      idx += rows
+    }
+  }
+
+  return mk.ndarray(flat, targetLength, rows, cols)
+}
+
+data class ExperienceBufferCNN(
+    val states: NDArray<Int, DN>,
+    val actions: D4Array<Int>,
+    val globalStates: D3Array<Float>,
+    val rewards: D2Array<Int>,
+) {
+  /** Serializes this [ExperienceBuffer] to an HDF5 file at [path]. */
+  fun serialize(path: Path) {
+    File("training_data").mkdirs()
+    val file = File("training_data", path.toString())
+    if (!file.exists()) {
+      file.createNewFile()
+    }
+
+    HdfFile.write(file.toPath()).use { hdfFile ->
+      val experience: WritableGroup = hdfFile.putGroup("experience")
+
+      experience.putDataset("states", states.toNested5D())
+      experience.putDataset("actions", actions.toNested4D())
+      experience.putDataset("globalStates", globalStates.toNested3DFloat())
+      experience.putDataset("rewards", rewards.toNested2D())
+    }
+  }
+
+  operator fun plus(other: ExperienceBufferCNN): ExperienceBufferCNN {
+    return ExperienceBufferCNN(
+        states = this.states + other.states,
+        actions = this.actions + other.actions,
+        globalStates = this.globalStates + other.globalStates,
+        rewards = this.rewards + other.rewards,
+    )
+  }
+
+  fun load(path: Path): ExperienceBufferCNN {
+    HdfFile(path).use { hdfFile ->
+      val statesDs = hdfFile.getDatasetByPath("/experience/states")
+      val actionsDs = hdfFile.getDatasetByPath("/experience/actions")
+      val globalStatesDs = hdfFile.getDatasetByPath("/experience/globalStates")
+      val rewardsDs = hdfFile.getDatasetByPath("/experience/rewards")
+
+      @Suppress("UNCHECKED_CAST")
+      val states = (statesDs.data as Array<Array<Array<Array<IntArray>>>>).toD5Array()
+      @Suppress("UNCHECKED_CAST")
+      val actions = (actionsDs.data as Array<Array<Array<IntArray>>>).toD4Array()
+      @Suppress("UNCHECKED_CAST")
+      val globalStates = (globalStatesDs.data as Array<Array<FloatArray>>).toD3ArrayFloat()
+      @Suppress("UNCHECKED_CAST") val rewards = (rewardsDs.data as Array<IntArray>).toD2Array()
+
+      return ExperienceBufferCNN(states, actions, globalStates, rewards)
+    }
+  }
+
+  // --- multik -> native nested array (for writing) ---
+
+  private fun NDArray<Int, DN>.toNested5D(): Array<Array<Array<Array<IntArray>>>> {
+    val (d0, d1, d2, d3, d4) = shape
+    return Array(d0) { i ->
+      Array(d1) { j ->
+        Array(d2) { k ->
+          Array(d3) { l ->
+            IntArray(d4) { m ->
+              this[i, j, k, l, m]
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private fun D4Array<Int>.toNested4D(): Array<Array<Array<IntArray>>> {
+    val (d0, d1, d2, d3) = shape
+    return Array(d0) { i ->
+      Array(d1) { j -> Array(d2) { k -> IntArray(d3) { l -> this[i, j, k, l] } } }
+    }
+  }
+
+  private fun D3Array<Int>.toNested3D(): Array<Array<IntArray>> {
+    val (d0, d1, d2) = shape
+    return Array(d0) { i -> Array(d1) { j -> IntArray(d2) { k -> this[i, j, k] } } }
+  }
+
+  private fun D3Array<Float>.toNested3DFloat(): Array<Array<FloatArray>> {
+    val (d0, d1, d2) = shape
+    return Array(d0) { i -> Array(d1) { j -> FloatArray(d2) { k -> this[i, j, k] } } }
+  }
+
+  private fun D2Array<Int>.toNested2D(): Array<IntArray> {
+    val (d0, d1) = shape
+    return Array(d0) { i -> IntArray(d1) { j -> this[i, j] } }
+  }
+
+  // --- native nested array -> multik (for reading) ---
+  private fun Array<Array<Array<Array<IntArray>>>>.toD5Array(): NDArray<Int, DN> {
+    val d0 = size
+    val d1 = this[0].size
+    val d2 = this[0][0].size
+    val d3 = this[0][0][0].size
+    val d4 = this[0][0][0][0].size
+    val flat = IntArray(d0 * d1 * d2 * d3 * d4)
+    var idx = 0
+    for (i in 0 until d0) for (j in 0 until d1) for (k in 0 until d2) for (l in
+        0 until d3) for (m in 0 until d4) {
+      flat[idx++] = this[i][j][k][l][m]
+    }
+    return mk.ndarray(flat, d0, d1, d2, d3, d4)
+  }
+
+  private fun Array<Array<Array<IntArray>>>.toD4Array(): D4Array<Int> {
+    val d0 = size
+    val d1 = this[0].size
+    val d2 = this[0][0].size
+    val d3 = this[0][0][0].size
+    val flat = IntArray(d0 * d1 * d2 * d3)
+    var idx = 0
+    for (i in 0 until d0) for (j in 0 until d1) for (k in 0 until d2) for (l in 0 until d3) {
+      flat[idx++] = this[i][j][k][l]
+    }
+    return mk.ndarray(flat, d0, d1, d2, d3)
+  }
+
+  private fun Array<Array<IntArray>>.toD3Array(): D3Array<Int> {
+    val d0 = size
+    val d1 = this[0].size
+    val d2 = this[0][0].size
+    val flat = IntArray(d0 * d1 * d2)
+    var idx = 0
+    for (i in 0 until d0) for (j in 0 until d1) for (k in 0 until d2) {
+      flat[idx++] = this[i][j][k]
+    }
+    return mk.ndarray(flat, d0, d1, d2)
+  }
+
+  private fun Array<Array<FloatArray>>.toD3ArrayFloat(): D3Array<Float> {
+    val d0 = size
+    val d1 = this[0].size
+    val d2 = this[0][0].size
+    val flat = FloatArray(d0 * d1 * d2)
+    var idx = 0
+    for (i in 0 until d0) for (j in 0 until d1) for (k in 0 until d2) {
+      flat[idx++] = this[i][j][k]
+    }
+    return mk.ndarray(flat, d0, d1, d2)
+  }
+
+  private fun Array<IntArray>.toD2Array(): D2Array<Int> {
+    val d0 = size
+    val d1 = this[0].size
+    val flat = IntArray(d0 * d1)
+    var idx = 0
+    for (i in 0 until d0) for (j in 0 until d1) {
+      flat[idx++] = this[i][j]
+    }
+    return mk.ndarray(flat, d0, d1)
+  }
 }

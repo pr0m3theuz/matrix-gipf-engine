@@ -161,88 +161,90 @@ data class ColumnInfo(
 }
 
 val columnInfos: List<ColumnInfo> =
-  (verticalLineIndexArray.map { arr ->
-      ColumnInfo(
-          columnMask = arr.fold(0UL) { acc, i -> acc or (1UL shl i) },
-          //		destinationMask = 1UL shl arr.last(),
-          positions =
-              arr.indices.map { k ->
-                1UL shl arr[k]
-              },
-          submasks =
-              arr.indices
-                  .map { k ->
-                    1UL shl arr[k]
-                  }
-                  .windowed(4)
-                  .map { sublist ->
-                    sublist.fold(0UL) { acc, lng ->
-                      acc or lng
-                    }
-                  },
-          shiftPairs =
-              (0 until arr.size - 1).map { k ->
-                (1UL shl arr[k]) to (1UL shl arr[k + 1])
-              },
-          lineOrientation = LineOrientation.VERTICAL,
-          pushDirections = Pair(PushDirection.UP, PushDirection.DOWN),
-      )
-    } +
-        upwardRightLineIndexArray.map { arr ->
-          ColumnInfo(
-              columnMask = arr.fold(0UL) { acc, i -> acc or (1UL shl i) },
-              //		destinationMask = 1UL shl arr.last(),
+  buildList {
+	  verticalLineIndexArray.mapTo(this) { arr ->
+	      ColumnInfo(
+	          columnMask = arr.fold(0UL) { acc, i -> acc or (1UL shl i) },
+	          //		destinationMask = 1UL shl arr.last(),
+	          positions =
+	              arr.indices.map { k ->
+	                1UL shl arr[k]
+	              },
+	          submasks =
+	              arr.indices
+	                  .map { k ->
+	                    1UL shl arr[k]
+	                  }
+	                  .windowed(4)
+	                  .map { sublist ->
+	                    sublist.fold(0UL) { acc, lng ->
+	                      acc or lng
+	                    }
+	                  },
+	          shiftPairs =
+	              (0 until arr.size - 1).map { k ->
+	                (1UL shl arr[k]) to (1UL shl arr[k + 1])
+	              },
+	          lineOrientation = LineOrientation.VERTICAL,
+	          pushDirections = Pair(PushDirection.UP, PushDirection.DOWN),
+	      )
+	    }
+	  upwardRightLineIndexArray.mapTo(this) { arr ->
+	    ColumnInfo(
+	        columnMask = arr.fold(0UL) { acc, i -> acc or (1UL shl i) },
+	        //		destinationMask = 1UL shl arr.last(),
 
-              positions =
-                  arr.indices.map { k ->
-                    1UL shl arr[k]
-                  },
-              submasks =
-                  arr.indices
-                      .map { k ->
-                        1UL shl arr[k]
-                      }
-                      .windowed(4)
-                      .map { sublist ->
-                        sublist.fold(0UL) { acc, lng ->
-                          acc or lng
-                        }
-                      },
-              shiftPairs =
-                  (0 until arr.size - 1).map { k ->
-                    (1UL shl arr[k]) to (1UL shl arr[k + 1])
-                  },
-              lineOrientation = LineOrientation.UPWARD_RIGHT,
-              pushDirections = Pair(PushDirection.UPPER_RIGHT, PushDirection.LOWER_LEFT),
-          )
-        } +
-        downwardRightLineIndexArray.map { arr ->
-          ColumnInfo(
-              columnMask = arr.fold(0UL) { acc, i -> acc or (1UL shl i) },
-              //		destinationMask = 1UL shl arr.last(),
-              positions =
-                  arr.indices.map { k ->
-                    1UL shl arr[k]
-                  },
-              submasks =
-                  arr.indices
-                      .map { k ->
-                        1UL shl arr[k]
-                      }
-                      .windowed(4)
-                      .map { sublist ->
-                        sublist.fold(0UL) { acc, lng ->
-                          acc or lng
-                        }
-                      },
-              shiftPairs =
-                  (0 until arr.size - 1).map { k ->
-                    (1UL shl arr[k]) to (1UL shl arr[k + 1])
-                  },
-              lineOrientation = LineOrientation.DOWNWARD_RIGHT,
-              pushDirections = Pair(PushDirection.LOWER_RIGHT, PushDirection.UPPER_LEFT),
-          )
-        }).mapIndexed { index, info -> info.copy(index = index) }
+	        positions =
+	            arr.indices.map { k ->
+	              1UL shl arr[k]
+	            },
+	        submasks =
+	            arr.indices
+	                .map { k ->
+	                  1UL shl arr[k]
+	                }
+	                .windowed(4)
+	                .map { sublist ->
+	                  sublist.fold(0UL) { acc, lng ->
+	                    acc or lng
+	                  }
+	                },
+	        shiftPairs =
+	            (0 until arr.size - 1).map { k ->
+	              (1UL shl arr[k]) to (1UL shl arr[k + 1])
+	            },
+	        lineOrientation = LineOrientation.UPWARD_RIGHT,
+	        pushDirections = Pair(PushDirection.UPPER_RIGHT, PushDirection.LOWER_LEFT),
+	    )
+	  }
+	  downwardRightLineIndexArray.mapTo(this) { arr ->
+	    ColumnInfo(
+	        columnMask = arr.fold(0UL) { acc, i -> acc or (1UL shl i) },
+	        //		destinationMask = 1UL shl arr.last(),
+	        positions =
+	            arr.indices.map { k ->
+	              1UL shl arr[k]
+	            },
+	        submasks =
+	            arr.indices
+	                .map { k ->
+	                  1UL shl arr[k]
+	                }
+	                .windowed(4)
+	                .map { sublist ->
+	                  sublist.fold(0UL) { acc, lng ->
+	                    acc or lng
+	                  }
+	                },
+	        shiftPairs =
+	            (0 until arr.size - 1).map { k ->
+	              (1UL shl arr[k]) to (1UL shl arr[k + 1])
+	            },
+	        lineOrientation = LineOrientation.DOWNWARD_RIGHT,
+	        pushDirections = Pair(PushDirection.LOWER_RIGHT, PushDirection.UPPER_LEFT),
+	    )
+	  }
+  }.mapIndexed { index, info -> info.copy(index = index) }
 
 val neighbouringBitsBitmasks: Map<ULong, ULong> = calculateNeighbouringBitmasks()
 

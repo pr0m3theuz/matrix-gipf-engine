@@ -10,9 +10,13 @@ import org.jetbrains.kotlinx.multik.api.ones
 import org.jetbrains.kotlinx.multik.api.zeros
 import org.jetbrains.kotlinx.multik.ndarray.data.D1Array
 import org.jetbrains.kotlinx.multik.ndarray.data.D2Array
+import org.jetbrains.kotlinx.multik.ndarray.data.D3Array
 import org.jetbrains.kotlinx.multik.ndarray.data.set
 import kotlin.math.min
 
+//
+
+// for graph neural network
 fun State.encodeState(): D2Array<Int> {
   // todo how does white pieces and black pieces compare to containing all the other boards as
 
@@ -499,6 +503,484 @@ fun State.encodeGlobalState(turnPhase: TurnPhase): D1Array<Float> {
 
   // current player color
   ndArray[25] = if (currentPlayer.name == PlayerName.WHITE) 0.0f else 1.0f
+
+  return ndArray
+}
+
+// TODO encode state for Convolution Neural Networks
+// https://eprints.qut.edu.au/85005/1/__staffhome.qut.edu.au_staffgroupm%24_meaton_Desktop_bits-7.pdf
+
+// bitboard layout for CNN (nested arrarys)
+// 0   8  16  24  32  40  48  56
+// 1   9  17  25  33  41  49  57
+// 2  10  18  26  34  42  50  58
+// 3  11  19  27  35  43  51  59
+// 4  12  20  28  36  44  52  60
+// 5  13  21  29  37  45  53  61
+// 6  14  22  30  38  46  54  62
+// 7  15  23  31  39  47  55  63
+
+// matches verticalLineIndexArray layout
+//    0   1   2   3   4   5   6   7
+//    B   C   D   E   F   G   H   I
+// 0  00  04  09  15  xx  xx  xx  xx
+// 1  01  05  10  16  22  xx  xx  xx
+// 2  02  06  11  17  23  28  xx  xx
+// 3  03  07  12  18  24  29  33  xx
+// 4  xx  08  13  19  25  30  34  37
+// 5  xx  xx  14  20  26  31  35  38
+// 6  xx  xx  xx  21  27  32  36  39
+// 7  xx  xx  xx  xx  xx  xx  xx  xx
+
+fun ULong.encodeToNestedArray(): D2Array<Int> {
+  val ndArray = mk.zeros<Int>(7, 8)
+
+	for ((colIndex, line) in verticalLineIndexArray.withIndex()) {
+		val rowOffset = if (colIndex in 4..7) colIndex - 3 else 0
+
+		for (row in line.indices) {
+			if ((this and (1UL shl line[row])) > 0UL) ndArray[row + rowOffset, colIndex] = 1
+		}
+	}
+
+  return ndArray
+}
+
+fun State.encodeStateCNN() : D3Array<Int> {
+  // todo how does white pieces and black pieces compare to containing all the other boards as
+
+  val STONE_COLOR = 0 // 0-45
+  val EMPTY = 46 // 1
+  val ONES = 47 // 1
+  val ZEROS = 48 // 1
+  val SENSIBLENESS = 49 // 1
+  val TURNS_SINCE = 50 // 8
+  val LIBERTIES = TURNS_SINCE + 7 // 6
+  val LIBERTIES_AFTER = LIBERTIES + 7 // 6
+  val RETRIVAL_SIZE = LIBERTIES_AFTER + 6 // 8
+  val CAPTURE_SIZE = RETRIVAL_SIZE + 8 // 8
+  val SELF_ATARI_SIZE = CAPTURE_SIZE + 8 // 8
+  val CURRENT_PLAYER_COLOR = SELF_ATARI_SIZE + 8
+
+  // features (95?) — TODO confirm total number of features
+  val features = CURRENT_PLAYER_COLOR
+  val nodeCount = 41
+  // TODO add global node
+  // column masks == adjacency matrix
+  val ndArray = mk.zeros<Int>(features, 7, 8)
+
+  when (currentPlayer.name) {
+    PlayerName.WHITE -> {
+      ndArray.set(0, bitboard.whitePieces.encodeToNestedArray())
+      ndArray.set(1, bitboard.whiteNeutralized.encodeToNestedArray())
+      ndArray.set(2, bitboard.whitePotentials.encodeToNestedArray())
+      ndArray.set(3, bitboard.whiteGIPF.encodeToNestedArray())
+      ndArray.set(4, bitboard.whiteTAMSK.encodeToNestedArray())
+      ndArray.set(5, bitboard.whiteYINSH.encodeToNestedArray())
+      ndArray.set(6, bitboard.whiteZERTZ.encodeToNestedArray())
+
+      // 7, 8, 9, 10, 11, 12, 13, 14
+      bitboard.whiteDVONNLayer
+        .map { it.encodeToNestedArray() }
+        .forEachIndexed { index, array ->
+          ndArray.set(7 + index, array)
+        }
+
+      // 15, 16, 17, 18, 19, 20, 21, 22
+      bitboard.whitePUNCTLayer
+        .map { it.encodeToNestedArray() }
+        .forEachIndexed { index, array ->
+          ndArray.set(15 + index, array)
+        }
+
+      ndArray.set(23, bitboard.blackPieces.encodeToNestedArray())
+      ndArray.set(24, bitboard.blackNeutralized.encodeToNestedArray())
+      ndArray.set(25, bitboard.blackGIPF.encodeToNestedArray())
+      ndArray.set(26, bitboard.blackPotentials.encodeToNestedArray())
+      ndArray.set(27, bitboard.blackZERTZ.encodeToNestedArray())
+      ndArray.set(28, bitboard.blackYINSH.encodeToNestedArray())
+      ndArray.set(29, bitboard.blackTAMSK.encodeToNestedArray())
+
+      // 30, 31, 32, 33, 34, 35, 36, 37
+      bitboard.blackDVONNLayer
+        .map { it.encodeToNestedArray() }
+        .forEachIndexed { index, array ->
+          ndArray.set(30 + index, array)
+        }
+
+      // 38, 39, 40, 41, 42, 43, 44, 45
+      bitboard.blackPUNCTLayer
+        .map { it.encodeToNestedArray() }
+        .forEachIndexed { index, array ->
+          ndArray.set(38 + index, array)
+        }
+    }
+    PlayerName.BLACK -> {
+      ndArray.set(0, bitboard.blackPieces.encodeToNestedArray())
+      ndArray.set(1, bitboard.blackNeutralized.encodeToNestedArray())
+      ndArray.set(2, bitboard.blackPotentials.encodeToNestedArray())
+      ndArray.set(3, bitboard.blackGIPF.encodeToNestedArray())
+      ndArray.set(4, bitboard.blackTAMSK.encodeToNestedArray())
+      ndArray.set(5, bitboard.blackYINSH.encodeToNestedArray())
+      ndArray.set(6, bitboard.blackZERTZ.encodeToNestedArray())
+
+      // 7, 8, 9, 10, 11, 12, 13, 14
+      bitboard.blackDVONNLayer
+        .map { it.encodeToNestedArray() }
+        .forEachIndexed { index, array ->
+          ndArray.set(7 + index, array)
+        }
+
+      // 15, 16, 17, 18, 19, 20, 21, 22
+      bitboard.blackPUNCTLayer
+        .map { it.encodeToNestedArray() }
+        .forEachIndexed { index, array ->
+          ndArray.set(15 + index, array)
+        }
+
+      ndArray.set(23, bitboard.whitePieces.encodeToNestedArray())
+      ndArray.set(24, bitboard.whiteNeutralized.encodeToNestedArray())
+      ndArray.set(25, bitboard.whiteGIPF.encodeToNestedArray())
+      ndArray.set(26, bitboard.whitePotentials.encodeToNestedArray())
+      ndArray.set(27, bitboard.whiteZERTZ.encodeToNestedArray())
+      ndArray.set(28, bitboard.whiteYINSH.encodeToNestedArray())
+      ndArray.set(29, bitboard.whiteTAMSK.encodeToNestedArray())
+
+      // 30, 31, 32, 33, 34, 35, 36, 37
+      bitboard.whiteDVONNLayer
+        .map { it.encodeToNestedArray() }
+        .forEachIndexed { index, array ->
+          ndArray.set(30 + index, array)
+        }
+
+      // 38, 39, 40, 41, 42, 43, 44, 45
+      bitboard.whitePUNCTLayer
+        .map { it.encodeToNestedArray() }
+        .forEachIndexed { index, array ->
+          ndArray.set(38 + index, array)
+        }
+    }
+  }
+
+  // empty spots
+  ndArray.set(
+    EMPTY,
+    if (bitboard.globalOccupancy != 0UL && bitboard.globalOccupancy != 1099511627775UL) bitboard.globalOccupancy.inv().encodeToNestedArray()
+    else if (bitboard.globalOccupancy == 0UL) 1099511627775UL.encodeToNestedArray()
+    else 0UL.encodeToNestedArray()
+  )
+
+  // ones
+  ndArray.set(ONES, mk.ones<Int>(7, 8))
+
+  // zeros
+  ndArray.set(ZEROS, mk.zeros<Int>(7, 8))
+
+  // Sensibleness (legal moves) — A move on this plane is 1 if the move is legal and doesn’t fill
+  // the current player’s eyes, and 0 otherwise.
+  // TODO + 46
+  // todo use fold to accumulate source & target bitmasks? would stacks matter?
+  // TODO need to change approach as I need to consider how each move affects the board & potentials
+  //  ndArray[num_self_atari_stones][bit] = 1
+  val availableMoves = mutableListOf<PackedMove>()
+  bitboard.identifyAvailableMoves(
+    currentPlayer,
+    columnInfos = columnInfos,
+    movesBuffer = availableMoves,
+  )
+
+  val flattenMoves =
+    availableMoves
+      .distinctBy { it.extractTargetBit() }
+      .fold(0UL) { acc, move ->
+        move.extractTargetBit()?.let { acc or it } ?: acc
+      }
+      .encodeToNestedArray()
+
+  ndArray.set(SENSIBLENESS, flattenMoves)
+
+  // TODO Turns since — number of turns or actions since move was made — This set of eight binary
+  // planes
+  //  indicates how many moves ago a move was played.
+  // multiple moves to the same bit will show up as just 1 move
+  val previousTurnsMoves = ULongArray(8)
+  // todo should previous move captures be add to previous move features
+  val previousTurnCaptures = ULongArray(8)
+
+  // last turn is first
+  turnMoves.keys.toList().takeLast(8).reversed().forEachIndexed { index, turn ->
+    val moves = turnMoves[turn] ?: error("Turn $turn moves not found!")
+
+    moves.forEach { move ->
+      when (move) {
+        is PackedMove.Multiple -> {
+          val bits =
+            move.values.fold(0UL) { acc, bit ->
+              acc or bit.extractTargetBit()
+            }
+          previousTurnCaptures[index] = previousTurnCaptures[index] or bits
+        }
+        is PackedMove.Single -> {
+          requireNotNull(move.value.extractTargetBit())
+          previousTurnsMoves[index] = previousTurnsMoves[index] or move.value.extractTargetBit()
+        }
+      }
+    }
+  }
+
+  previousTurnsMoves
+    .map { it.encodeToNestedArray() }
+    .forEachIndexed { index, array ->
+      ndArray.set(TURNS_SINCE + index, array)
+    }
+
+  // Liberties — Number of liberties (empty adjacent points) + 6
+  val liberitiesPlanes = ULongArray(7)
+
+  neighbouringBitsBitmasks.forEach { (bit, mask) ->
+    val liberties = mask.countOneBits() - (mask and bitboard.globalOccupancy).countOneBits()
+    liberitiesPlanes[liberties] = liberitiesPlanes[liberties] or bit
+  }
+
+  //
+  liberitiesPlanes
+    .map { it.encodeToNestedArray() }
+    .forEachIndexed { index, array ->
+      ndArray.set(LIBERTIES + index, array)
+    }
+
+  // Liberties after move / board after move + 6
+  val postMoveLiberities = ULongArray(7)
+
+  // TODO potentials are currently ignored
+  val retrievalPlanes = ULongArray(8)
+  // capture — How many opponent stones would this move capture?
+  val capturePlanes = ULongArray(8)
+
+  availableMoves
+    .distinctBy { it.extractTargetBit() }
+    .forEach { move ->
+      val newState = this.deepCopy()
+      val newBitboard = bitboard.deepCopy()
+
+      when (move) {
+        is PackedMove.Multiple -> {}
+        is PackedMove.Single -> {
+          when (move.value.extractMoveType()) {
+            MoveType.UnusedTamskPotential -> {
+              val unusedTAMSKPotential = newBitboard.removeUnusedTamskPotential(newState.currentPlayer)
+
+              // add the unused TAMSK Potential to the opponent's captured pieces.
+              newState.nextPlayer.capturedPieces.add(unusedTAMSKPotential)
+            }
+            MoveType.AddPiece -> {
+              if (move.value.extractSourceBit() == boardCenterSpotMask) {
+                newBitboard.useTamskPotential(move.value)
+              } else {
+                val selectedPiece =
+                  move.value.onlyPiece().let { newState.currentPlayer.selectPiece(it) }
+
+                selectedPiece?.let {
+                  newBitboard.addPieceToBitboard(move.value)
+                }
+              }
+            }
+            MoveType.UsePotential -> {
+              newBitboard.usePiecePotential(
+                move = move.value,
+              )
+            }
+            MoveType.RetrieveCapturePieces -> {}
+          }
+        }
+      }
+
+      newBitboard.assertPieceCount(
+        currentPlayer = newState.currentPlayer,
+        nextPlayer = newState.nextPlayer,
+      )
+
+      neighbouringBitsBitmasks.forEach { (bit, mask) ->
+        val liberties =
+          mask.countOneBits() - (mask and newBitboard.globalOccupancy).countOneBits()
+        postMoveLiberities[liberties] = postMoveLiberities[liberties] or bit
+      }
+
+      // todo does this even make sense in this context as you decide what to pieces to remove
+      //  * select the max value or populate each plane from minimum to maximum of 8
+      //  * neural network output which pieces to remove
+      //  *
+      val removePiecesPowerset = mutableListOf<PackedMove>()
+      newBitboard.identifyAvailableMoves(currentPlayer, columnInfos, removePiecesPowerset)
+      removePiecesPowerset.forEach { retrieveCapture ->
+        when (retrieveCapture) {
+          is PackedMove.Multiple -> {
+            check(retrieveCapture.values.isNotEmpty()) {
+              "There must be at least one column"
+            }
+            // newBitboard.deepCopy() or undo removal
+            val retrievedCapturedPieces = mutableListOf<UInt>()
+
+            newBitboard
+              .deepCopy()
+              .removeSelectedPieces(
+                player = newState.currentPlayer,
+                piecesToRemove = retrieveCapture.values.distinct(),
+                retrievedCapturedPieces,
+              )
+
+            val (retrievedPieces, capturedPieces) =
+              retrievedCapturedPieces.partition {
+                it.extractRetrieveCapture() == RetrieveCapture.RETRIEVE
+              }
+
+            val retrievedIndex = min(retrievedPieces.size, 7)
+            val capturedIndex = min(capturedPieces.size, 7)
+
+            retrievedPieces.forEach { piece ->
+              retrievalPlanes[retrievedIndex] =
+                retrievalPlanes[retrievedIndex] or piece.extractTargetBit()
+            }
+            capturedPieces.forEach { piece ->
+              capturePlanes[capturedIndex] =
+                capturePlanes[capturedIndex] or piece.extractTargetBit()
+            }
+          }
+          is PackedMove.Single -> {}
+        }
+      }
+    }
+
+  postMoveLiberities
+    .map { it.encodeToNestedArray() }
+    .forEachIndexed { index, array ->
+      ndArray.set(LIBERTIES_AFTER + index, array)
+    }
+
+  // 50, 51, 52, 53, 54, 55, 56, 57
+  retrievalPlanes
+    .map { it.encodeToNestedArray() }
+    .forEachIndexed { index, array ->
+      ndArray.set(RETRIVAL_SIZE + index, array)
+    }
+
+  // 58, 59, 60, 61, 62, 63, 64, 65
+  capturePlanes
+    .map { it.encodeToNestedArray() }
+    .forEachIndexed { index, array ->
+      ndArray.set(CAPTURE_SIZE + index, array)
+    }
+
+  // Self-atari size — How many of own stones would be captured
+  //  If this move was played, how many of your own stones
+  //  would be put into atari and could be captured by the opponent
+  //  in the next move?
+
+  // TODO potentials are currently ignored
+
+  //  val opponentRetrievalPlanes = ULongArray(8)
+  val opponentCapturePlanes = ULongArray(8)
+
+  val availableOpponentMoves = mutableListOf<PackedMove>()
+  bitboard.identifyAvailableMoves(nextPlayer, movesBuffer = availableOpponentMoves)
+
+  availableOpponentMoves
+    .distinctBy { it.extractTargetBit() }
+    .forEach { move ->
+      // TODO new bitboard State
+      //  ndArray[num_self_atari_stones][move.targetBit] = 1
+      val newState = this.deepCopy()
+      val newBitboard = bitboard.deepCopy()
+
+      when (move) {
+        is PackedMove.Multiple -> {}
+        is PackedMove.Single -> {
+          when (move.value.extractMoveType()) {
+            MoveType.UnusedTamskPotential -> {
+              val unusedTAMSKPotential = newBitboard.removeUnusedTamskPotential(newState.nextPlayer)
+
+              // add the unused TAMSK Potential to the opponent's captured pieces.
+              newState.currentPlayer.capturedPieces.add(unusedTAMSKPotential)
+            }
+            MoveType.AddPiece -> {
+              if (move.value.extractSourceBit() == boardCenterSpotMask) {
+                newBitboard.useTamskPotential(move.value)
+              } else {
+                val selectedPiece =
+                  move.value.onlyPiece()?.let { newState.nextPlayer.selectPiece(it) }
+
+                selectedPiece?.let {
+                  newBitboard.addPieceToBitboard(move.value)
+                }
+              }
+            }
+            MoveType.UsePotential -> {
+              newBitboard.usePiecePotential(
+                move = move.value,
+              )
+            }
+            MoveType.RetrieveCapturePieces -> {}
+          }
+        }
+      }
+
+      newBitboard.assertPieceCount(
+        currentPlayer = newState.nextPlayer,
+        nextPlayer = newState.currentPlayer,
+      )
+
+      val opponentRetrievedCapturedPieces = mutableListOf<PackedMove>()
+      newBitboard.identifyPiecesToRemove(newState.nextPlayer, opponentRetrievedCapturedPieces)
+      opponentRetrievedCapturedPieces.forEach { retrieveCapture ->
+        when (retrieveCapture) {
+          is PackedMove.Multiple -> {
+            // newBitboard.deepCopy() or undo removal
+            val retrievedCapturedPieces = mutableListOf<UInt>()
+
+            newBitboard
+              .deepCopy()
+              .removeSelectedPieces(
+                player = newState.nextPlayer,
+                piecesToRemove = retrieveCapture.values.distinct(),
+                movesBuffer = retrievedCapturedPieces,
+              )
+            val capturedPieces =
+              retrievedCapturedPieces
+                .partition { it.extractRetrieveCapture() == RetrieveCapture.CAPTURE }
+                .second
+
+            //      val retrievedIndex = min(retrievedPieces.size, 7)
+            val capturedIndex = min(capturedPieces.size, 7)
+
+            //      retrievalPlanes[retrievedIndex] = retrievalPlanes[retrievedIndex] or
+            // addAtIndex
+            capturedPieces.forEach { piece ->
+              opponentCapturePlanes[capturedIndex] =
+                opponentCapturePlanes[capturedIndex] or piece.extractTargetBit()
+            }
+          }
+
+          is PackedMove.Single -> {}
+        }
+      }
+    }
+
+  // 66, 67, 68, 69, 70, 71, 72, 73
+  opponentCapturePlanes
+    .map { it.encodeToNestedArray() }
+    .forEachIndexed { index, array ->
+      ndArray.set(SELF_ATARI_SIZE + index, array)
+    }
+
+  // current player color
+//  when (currentPlayer.name) {
+//    PlayerName.WHITE -> {
+//      ndArray.set(CURRENT_PLAYER_COLOR, mk.zeros<Int>(nodeCount))
+//    }
+//    PlayerName.BLACK -> {
+//      ndArray.set(CURRENT_PLAYER_COLOR, mk.ones<Int>(nodeCount))
+//    }
+//  }
 
   return ndArray
 }
